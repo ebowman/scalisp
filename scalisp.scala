@@ -91,6 +91,26 @@ trait LispParser extends JavaTokenParsers {
         override def eval(implicit env: Env): Expression = Bool(left < right)
       }
     } |
+    "=" ~> nExpression ~ nExpression ^^ {
+      case left ~ right => new Expression {
+        override def eval(implicit env: Env): Expression = Bool(left.eval.toString == right.eval.toString)
+      }
+    } |
+    ">" ~> nExpression ~ nExpression ^^ {
+      case left ~ right => new Expression {
+        override def eval(implicit env: Env): Expression = Bool(left > right)
+      }
+    } |
+    ">=" ~> nExpression ~ nExpression ^^ {
+      case left ~ right => new Expression {
+        override def eval(implicit env: Env): Expression = Bool(left >= right)
+      }
+    } |
+    "<=" ~> nExpression ~ nExpression ^^ {
+      case left ~ right => new Expression {
+        override def eval(implicit env: Env): Expression = Bool(left <= right)
+      }
+    } |
     "if" ~> nExpression ~ nExpression ~ nExpression ^^ {
       case test ~ then ~ els => new Expression {
         override def eval(implicit env: Env): Expression = if (test) then.eval else els.eval
@@ -104,6 +124,16 @@ trait LispParser extends JavaTokenParsers {
     "-" ~> nExpression ~ rep1(nExpression) ^^ {
       case head ~ tail => new Expression {
         override def eval(implicit env: Env): Expression = Num(((head: Long) +: tail.map(n => (n: Long) * -1)).sum)
+      }
+    } |
+    "*" ~> nExpression ~ rep1(nExpression) ^^ {
+      case head ~ tail => new Expression {
+        override def eval(implicit env: Env): Expression = Num(((head: Long) +: tail.map(n => (n: Long))).product)
+      }
+    } |
+    "/" ~> nExpression ~ nExpression ^^ {
+      case head ~ tail => new Expression {
+        override def eval(implicit env: Env): Expression = Num(head / tail)
       }
     } |
     variable ~ rep(nExpression) ^^ {
@@ -122,7 +152,8 @@ trait LispParser extends JavaTokenParsers {
 }
 
 object Driver extends App {
-  println(Lisp.parse(
+  import Lisp.parse
+  println(parse(
     """
       | (defun fib (n) "recursive"
       |   (if
@@ -132,5 +163,8 @@ object Driver extends App {
       | )
       |
       | """.stripMargin))
-  println(Lisp.parse("(fib 40)"))
+  println(parse("(fib 40)"))
+
+  println(parse("""(defun fac (n) "factorial" (if (< n 2) n (* n (fac (- n 1)))))"""))
+  println(parse("(fac 6)"))
 }
