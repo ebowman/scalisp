@@ -4,23 +4,25 @@ object Lisp extends LispParser {
   val dictionary = collection.mutable.Map[Var, Expression]()
 
   def parse(program: String): String = {
-    parseAll(expression, program).toString.trim
+    parseAll(parenExpression, program).toString.trim
   }
 }
 
 case class Env(vars: Map[Var, Expression])
 
 trait Expression {
-  def eval(env: Env): Expression
+  def eval(implicit env: Env): Expression
 }
 
 trait ConcreteExpression extends Expression {
   def repr: String
-  def eval(env: Env): Expression = this
+
+  def eval(implicit env: Env): Expression = this
+
   override def toString = repr
 }
 
-case class Num(v: Double) extends ConcreteExpression {
+case class Num(v: Long) extends ConcreteExpression {
   val repr = v.toString
 }
 
@@ -33,129 +35,88 @@ case class Str(s: String) extends ConcreteExpression {
 }
 
 case class Var(repr: String) extends Expression {
-  override def eval(env: Env): Expression = {
-//    println("Evaluting %s with %s".format(this, env))
-    val resolved = env.vars(this)
-    resolved.eval(env)
+  override def eval(implicit env: Env): Expression = {
+    env.vars(this).eval
   }
 }
 
 case class Function(name: String, args: List[String], desc: String, expression: Expression) extends Expression {
-  override def eval(env: Env): Expression = {
 
+  override def eval(implicit env: Env): Expression = {
     val vars = env.vars.map {
-      case (v: Var, e: Expression) if args.contains(v.repr) =>
-        v -> e.eval(env)
-      case (v: Var, e: Expression) =>
-        v -> e
+      case (v: Var, e: Expression) if args.contains(v.repr) => v -> e.eval
+      case (v: Var, e: Expression) => v -> e
     }
-
     expression.eval(env.copy(vars = vars))
   }
-
-  override def toString = "%s (%s) \"%s\" => %s".format(name, args, desc, expression)
 }
 
 trait LispParser extends JavaTokenParsers {
   override val whiteSpace = "[ \t\r\n]+".r
+  implicit def expr2long(expr: Expression)(implicit env: Env): Long = expr.eval(env).toString.toLong
+  implicit def expr2bool(expr: Expression)(implicit env: Env): Boolean = expr.eval(env).toString.toBoolean
 
   def dictionary: collection.mutable.Map[Var, Expression]
 
-  def number: Parser[Num] = (wholeNumber | decimalNumber | floatingPointNumber) ^^ {
-    case n => Num(n.toDouble)
-  }
+  def number: Parser[Num] = wholeNumber ^^ (n => Num(n.toLong))
 
-  def string: Parser[Str] = stringLiteral ^^ {
-    case n => Str(n)
-  }
+  def string: Parser[Str] = stringLiteral ^^ (s => Str(s))
 
   def variable: Parser[Var] = """[a-zA-Z][a-zA-Z0-9_-]*""".r ^^ (n => Var(n))
-
-  def boolean: Parser[Bool] = """true|false""".r ^^ (b => Bool(b.toBoolean))
 
   def expr: Parser[Expression] =
     "defun" ~> (variable ~ ("(" ~> rep(variable) <~ ")") ~ string ~ expression) ^^ {
       case name ~ vars ~ desc ~ body =>
-        val func = Function(name.repr, vars.map(_.repr), desc.repr, body)
-        dictionary += name -> func
-        func
+        dictionary += name -> Function(name.repr, vars.map(_.repr), desc.repr, body)
+        dictionary(name)
     } |
       "<" ~> expression ~ expression ^^ {
         case left ~ right => new Expression {
-          override def eval(env: Env): Expression = {
-//            println("evaluating %s < %s with %s".format(left, right, env))
-            val leftEval = left.eval(env)
-            val rightEval = right.eval(env)
-            val result = Bool(leftEval.toString.toDouble < rightEval.toString.toDouble)
-//            println("result (<) = %s".format(result))
-            result
-          }
-          override def toString = "< %s %s".format(left, right)
+          override def eval(implicit env: Env): Expression = Bool(left < right)
         }
       } |
       "if" ~> (expression ~ expression ~ expression) ^^ {
         case test ~ then ~ els => new Expression {
-          override def eval(env: Env): Expression = {
-//            println("evaluating if (%s) %s else %s with %s".format(test, then, els, env))
-            val result = if (test.eval(env).toString.toBoolean) {
-              then.eval(env)
-            } else {
-              els.eval(env)
-            }
-//            println("result (if) = %s".format(result))
-            result
-          }
-          override def toString = "if (%s) %s else %s".format(test, then, els)
+          override def eval(implicit env: Env): Expression =  if (test) then.eval else els.eval
         }
       } |
       "+" ~> expression ~ rep1(expression) ^^ {
         case head ~ tail => new Expression {
-          override def eval(env: Env): Expression = {
-//            println("Evaluating %s + %s with %s".format(head, tail, env))
-            val result = Num((head.eval(env).toString.toDouble +: tail.map(_.eval(env).toString.toDouble)).sum)
-//            println("result (+) = %s".format(result))
-            result
-          }
-          override def toString = "+ %s :: %s".format(head, tail)
+          override def eval(implicit env: Env): Expression = Num(((head: Long) +: tail.map(n => n: Long)).sum)
         }
       } |
       "-" ~> expression ~ rep1(expression) ^^ {
         case head ~ tail => new Expression {
-          override def eval(env: Env): Expression = {
-//            println("Evaluating - on %s -> %s with %s".format(head, tail, env))
-            val result = Num((head.eval(env).toString.toDouble +: tail.map(_.eval(env).toString.toDouble * -1d)).sum)
-//            println("result (-) = %s".format(result))
-            result
-          }
-          override def toString = "- %s :: %s".format(head, tail)
+          override def eval(implicit env: Env): Expression = Num(((head: Long) +: tail.map(n => (n: Long) * -1)).sum)
         }
       } |
       variable ~ rep(expression) ^^ {
         case fname ~ args => new Expression {
-          override def eval(env: Env): Expression = {
-//            println("Evaluating function %s(%s) with %s".format(fname, args, env))
+          override def eval(implicit env: Env): Expression = {
             val func = dictionary(fname).asInstanceOf[Function]
-            val newEnv = env.copy(vars = env.vars ++ func.args.map(Var(_)).zip(args.map(_.eval(env))))
-//            println("newEnv = %s".format(newEnv))
+            val newEnv = env.copy(vars = env.vars ++ func.args.map(Var(_)).zip(args.map(_.eval)))
             func.eval(newEnv)
           }
-          override def toString = "fn: %s (%s)".format(fname, args)
         }
       }
 
-  def expression: Parser[Expression] = ("(" ~> expr <~ ")" | boolean | variable | string | number)
+  def expression: Parser[Expression] = ("(" ~> expr <~ ")" | variable | string | number)
 
-  def parenExpression: Parser[Expression] = "(" ~> expression <~ ")" | "(" ~> expr <~ ")"
+  def parenExpression: Parser[Expression] = "(" ~> (variable | string | number ) <~ ")" | "(" ~> expr <~ ")"
 }
 
 object Driver extends App with LispParser {
   val dictionary = collection.mutable.Map[Var, Expression]()
-  //    println(parseAll(parenExpression, "(< 1 2)").get.toBoolean(Env(dictionary.toMap)))
-  //    println(parseAll(parenExpression, "(+ 1 2)").get.toDouble(Env(dictionary.toMap)))
-  //    println(parseAll(parenExpression, "(- 1 2)").get.toDouble(Env(dictionary.toMap)))
-  //    println(parseAll(parenExpression, "(\"hello\")").get.toString(Env(dictionary.toMap)))
-//  println(parseAll(parenExpression, """(defun r1 (n) "silly" (if (< n 1) n (r1 (- n 1))))"""))
-//  println("answer: " + parseAll(parenExpression, """(r1 1)""").get.eval(Env(dictionary.toMap)))
+  implicit def env = Env(dictionary.toMap)
+
   println(parseAll(parenExpression, """(defun fib (n) "recursive" (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))"""))
-  println(parseAll(parenExpression, """(fib 40)""").get.eval(Env(dictionary.toMap)))
+  for (i <- 1 to 40) {
+    println("%d -> %s".format(i, parseAll(parenExpression, "(fib %d)".format(i)).get.eval))
+  }
+
+  println(parseAll(parenExpression, """(fib 10)""").get.eval)
+  val start = System.currentTimeMillis()
+  println(parseAll(parenExpression, """(fib 40)""").get.eval)
+  val finish = System.currentTimeMillis()
+  println("elapsed = %d".format(finish - start))
 }
