@@ -6,7 +6,12 @@ object Lisp extends LispParser {
   implicit def env = Env(dictionary.toMap)
 
   def parse(program: String): String = {
-    parseAll(sExpression, program).get.eval.toString
+    val result = parseAll(sExpression, program.trim)
+    if (result.successful) {
+      result.get.eval.toString
+    } else {
+      sys.error(result.toString)
+    }
   }
 }
 
@@ -119,6 +124,15 @@ trait LispParser extends JavaTokenParsers {
 }
 
 object Driver extends App {
-  println(Lisp.parse( """(defun fib (n) "recursive" (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))"""))
+  println(Lisp.parse(
+    """
+      | (defun fib (n) "recursive"
+      |   (if
+      |     (< n 2)
+      |     n
+      |     (+ (fib (- n 1)) (fib (- n 2))))
+      | )
+      |
+      | """.stripMargin))
   println(Lisp.parse("(fib 40)"))
 }
