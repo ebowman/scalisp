@@ -1,5 +1,5 @@
-scalalisp
-========
+scalisp
+=======
 
 Simple lisp interpreter for a Scala Breakfast exercise at Gilt Ireland.
 
