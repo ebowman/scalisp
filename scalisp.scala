@@ -68,8 +68,6 @@ case class Function(name: String, args: List[String], desc: String, expression: 
 }
 
 trait LispParser extends JavaTokenParsers {
-  override val whiteSpace = "[ \t\r\n]+".r
-
   implicit def expr2long(expr: Expression)(implicit env: Env): Long = expr.eval(env).toString.toLong
 
   implicit def expr2bool(expr: Expression)(implicit env: Env): Boolean = expr.eval(env).toString.toBoolean
@@ -120,7 +118,7 @@ trait LispParser extends JavaTokenParsers {
 
   def nExpression: Parser[Expression] = ("(" ~> function <~ ")" | variable | string | number)
 
-  def sExpression: Parser[Expression] = "(" ~> (variable | string | number) <~ ")" | "(" ~> function <~ ")"
+  def sExpression: Parser[Expression] = "(" ~> (function | variable | string | number) <~ ")"
 }
 
 object Driver extends App {
