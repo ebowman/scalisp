@@ -1,20 +1,5 @@
 import util.parsing.combinator.JavaTokenParsers
 
-object Lisp extends LispParser {
-  val dictionary = collection.mutable.Map[Var, Expression]()
-
-  implicit def env = Env(dictionary.toMap)
-
-  def parse(program: String): String = {
-    val result = parseAll(sExpression, program.trim)
-    if (result.successful) {
-      result.get.eval.toString
-    } else {
-      sys.error(result.toString)
-    }
-  }
-}
-
 case class Env(vars: Map[Var, Expression])
 
 trait Expression {
@@ -37,46 +22,56 @@ case class Bool(b: Boolean) extends EvaluatedExpression {
   val repr = b.toString
 }
 
-case class Str(s: String) extends EvaluatedExpression {
-  val repr = s.drop(1).take(s.size - 2)
-}
+case class Str(repr: String) extends EvaluatedExpression
 
 case class Var(repr: String) extends Expression {
-  override def eval(implicit env: Env): Expression = {
-    env.vars(this).eval
-  }
+  override def eval(implicit env: Env): Expression = env.vars(this).eval
 }
 
 case class Function(name: String, args: List[String], desc: String, expression: Expression) extends Expression {
 
-  // since Lisp is pure (no side effects), a function can memoize its results
-  val memo = collection.mutable.Map[Env, Expression]()
+  // since Lisp is pure (no side effects), a function can memoize its results.
+  // pretty slow without this.
+  val memo = collection.mutable.Map[Map[Var, Expression], Expression]()
 
   override def eval(implicit env: Env): Expression = {
-    memo.getOrElseUpdate(env, {
-      // everything that is a variable this function depends on, needs to be
-      // evaluated before this function can evaluate. Other variables do not
-      // need to evaluate. pretty slow without this!
-      val vars = env.vars.map {
-        case (v: Var, e: Expression) if args.contains(v.repr) => v -> e.eval
-        case (v: Var, e: Expression) => v -> e
-      }
-      expression.eval(env.copy(vars = vars))
+    val varsInThisFunction = env.vars.collect {
+      case (v: Var, e: Expression) if args.contains(v.repr) => v -> e.eval
+    }
+    memo.getOrElseUpdate(varsInThisFunction, {
+      expression.eval(env.copy(vars = env.vars ++ varsInThisFunction))
     })
-    memo(env)
+    memo(varsInThisFunction)
   }
 }
 
 trait LispParser extends JavaTokenParsers {
+  val dictionary = collection.mutable.Map[Var, Expression]()
+
+  implicit def env = Env(dictionary.toMap)
+
+  def parse(program: String): String = {
+    val result = parseAll(sExpression, program.trim)
+    if (result.successful) {
+      result.get.eval.toString
+    } else {
+      sys.error(result.toString)
+    }
+  }
+
   implicit def expr2long(expr: Expression)(implicit env: Env): Long = expr.eval(env).toString.toLong
 
   implicit def expr2bool(expr: Expression)(implicit env: Env): Boolean = expr.eval(env).toString.toBoolean
 
-  def dictionary: collection.mutable.Map[Var, Expression]
+  implicit def expr2str(expr: Expression)(implicit env: Env): String = expr.eval(env).toString
 
-  def number: Parser[Num] = wholeNumber ^^ (n => Num(n.toLong))
+  implicit def bool2Bool(bool: Boolean): Bool = Bool(bool)
 
-  def string: Parser[Str] = stringLiteral ^^ (s => Str(s))
+  implicit def long2Num(num: Long): Num = Num(num)
+
+  def number: Parser[Num] = wholeNumber ^^ (n => n.toLong)
+
+  def string: Parser[Str] = stringLiteral ^^ (s => Str(s.drop(1).take(s.length - 2)))
 
   def variable: Parser[Var] = """[a-zA-Z][a-zA-Z0-9_-]*""".r ^^ (n => Var(n))
 
@@ -84,31 +79,31 @@ trait LispParser extends JavaTokenParsers {
     "defun" ~> (variable ~ ("(" ~> rep(variable) <~ ")") ~ string ~ nExpression) ^^ {
       case name ~ vars ~ desc ~ body =>
         dictionary += name -> Function(name.repr, vars.map(_.repr), desc.repr, body)
-        Str("\"defined %s\"".format(name))
+        Str("defined %s".format(name))
     } |
     "<" ~> nExpression ~ nExpression ^^ {
       case left ~ right => new Expression {
-        override def eval(implicit env: Env): Expression = Bool(left < right)
+        override def eval(implicit env: Env): Expression = left < right
       }
     } |
     "=" ~> nExpression ~ nExpression ^^ {
       case left ~ right => new Expression {
-        override def eval(implicit env: Env): Expression = Bool(left.eval.toString == right.eval.toString)
+        override def eval(implicit env: Env): Expression = (left: String) == (right: String)
       }
     } |
     ">" ~> nExpression ~ nExpression ^^ {
       case left ~ right => new Expression {
-        override def eval(implicit env: Env): Expression = Bool(left > right)
+        override def eval(implicit env: Env): Expression = left > right
       }
     } |
     ">=" ~> nExpression ~ nExpression ^^ {
       case left ~ right => new Expression {
-        override def eval(implicit env: Env): Expression = Bool(left >= right)
+        override def eval(implicit env: Env): Expression = left >= right
       }
     } |
     "<=" ~> nExpression ~ nExpression ^^ {
       case left ~ right => new Expression {
-        override def eval(implicit env: Env): Expression = Bool(left <= right)
+        override def eval(implicit env: Env): Expression = left <= right
       }
     } |
     "if" ~> nExpression ~ nExpression ~ nExpression ^^ {
@@ -118,22 +113,22 @@ trait LispParser extends JavaTokenParsers {
     } |
     "+" ~> nExpression ~ rep1(nExpression) ^^ {
       case head ~ tail => new Expression {
-        override def eval(implicit env: Env): Expression = Num(((head: Long) +: tail.map(n => n: Long)).sum)
+        override def eval(implicit env: Env): Expression = ((head: Long) +: tail.map(n => n: Long)).sum
       }
     } |
     "-" ~> nExpression ~ rep1(nExpression) ^^ {
       case head ~ tail => new Expression {
-        override def eval(implicit env: Env): Expression = Num(((head: Long) +: tail.map(n => (n: Long) * -1)).sum)
+        override def eval(implicit env: Env): Expression = ((head: Long) +: tail.map(n => (n: Long) * -1)).sum
       }
     } |
     "*" ~> nExpression ~ rep1(nExpression) ^^ {
       case head ~ tail => new Expression {
-        override def eval(implicit env: Env): Expression = Num(((head: Long) +: tail.map(n => (n: Long))).product)
+        override def eval(implicit env: Env): Expression = ((head: Long) +: tail.map(n => (n: Long))).product
       }
     } |
     "/" ~> nExpression ~ nExpression ^^ {
       case head ~ tail => new Expression {
-        override def eval(implicit env: Env): Expression = Num(head / tail)
+        override def eval(implicit env: Env): Expression = head / tail
       }
     } |
     variable ~ rep(nExpression) ^^ {
@@ -151,8 +146,7 @@ trait LispParser extends JavaTokenParsers {
   def sExpression: Parser[Expression] = "(" ~> (function | variable | string | number) <~ ")"
 }
 
-object Driver extends App {
-  import Lisp.parse
+object Driver extends App with LispParser {
   println(parse(
     """
       | (defun fib (n) "recursive"
