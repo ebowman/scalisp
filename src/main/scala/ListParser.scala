@@ -1,4 +1,5 @@
-import util.parsing.combinator.JavaTokenParsers
+import jline.ConsoleReader
+import scala.util.parsing.combinator.JavaTokenParsers
 
 case class Env(vars: Map[Var, Expression])
 
@@ -147,18 +148,19 @@ trait LispParser extends JavaTokenParsers {
 }
 
 object Driver extends App with LispParser {
-  println(parse(
-    """
-      | (defun fib (n) "recursive"
-      |   (if
-      |     (< n 2)
-      |     n
-      |     (+ (fib (- n 1)) (fib (- n 2))))
-      | )
-      |
-      | """.stripMargin))
-  println(parse("(fib 40)"))
-
-  println(parse("""(defun fac (n) "factorial" (if (< n 2) n (* n (fac (- n 1)))))"""))
-  println(parse("(fac 6)"))
+  val reader = new ConsoleReader()
+  reader.setBellEnabled(false)
+  var line = reader.readLine("> ")
+  while (line != null) {
+    try {
+      val start = System.currentTimeMillis
+      val result = parse(line)
+      val elapsed = System.currentTimeMillis - start
+      println("(%d ms) %s".format(elapsed, result))
+    } catch {
+      case e => println(e.getMessage)
+    }
+    line = reader.readLine("> ")
+  }
+  println("bye")
 }

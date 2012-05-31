@@ -11,6 +11,7 @@ resolvers ++= Seq(
         )
 
 libraryDependencies ++= Seq(
+        "jline" % "jline" % "0.9.94",
         "org.scalatest" %% "scalatest" % "1.6.1" % "test",
         "org.scala-tools.testing" %% "scalacheck" % "1.9" % "test"
         )
