@@ -1,21 +1,23 @@
 scalisp
 =======
 
-Simple lisp interpreter for a Scala Breakfast exercise at Gilt Ireland.
+Simple lisp repl, a project for a Scala Breakfast exercise at Gilt Ireland.
+
+Supports just a tiny subset of some micro lisp: defun, if, +, -, *, /, <, >, <=, >= =.
 
 Example:
-
-    object Driver extends App {
-      println(Lisp.parse( """(defun fib (n) "recursive" (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))"""))
-      println(Lisp.parse("(fib 40)"))
-    }
-
-Output:
 
     $ sbt run
     [info] Loading global plugins from /Users/ebowman/.sbt/plugins
     [info] Set current project to scalisp (in build file:/Users/ebowman/src/scalisp/)
     [info] Running Driver 
-    defined Var(fib)
-    102334155
-    [success] Total time: 1 s, completed May 29, 2012 4:40:13 PM
+    > (defun fac (x) "" (if (< x 2) x (* x (fac (- x 1)))))
+    (51 ms) defined Var(fac)
+    > fac(10)
+    [1.1] failure: `(' expected but `f' found
+
+    fac(10)
+    ^
+    > (fac 10)
+    (6 ms) 3628800
+
