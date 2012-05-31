@@ -12,6 +12,7 @@ import org.scalatest.prop.Checkers
 class LispParserTest extends FlatSpec with ShouldMatchers with Checkers {
 
   val parser = new LispParser {}
+
   import parser.parse
 
   "A Lisp parser" should "add correctly" in {
@@ -75,7 +76,7 @@ class LispParserTest extends FlatSpec with ShouldMatchers with Checkers {
     }
   }
   it should "factorial correctly" in {
-    parse("""(defun fac (n) "factorial" (if (< n 2) n (* n (fac (- n 1)))))""")
+    parse( """(defun fac (n) "factorial" (if (< n 2) n (* n (fac (- n 1)))))""")
     parse("(fac 6)").toLong should equal(720l)
   }
   it should "fibonnaci correctly" in {
@@ -94,9 +95,14 @@ class LispParserTest extends FlatSpec with ShouldMatchers with Checkers {
   }
 
   it should "support passing a function" in {
-    parse("""(defun add (x y) "" (+ x y))""")
-//    parse("(add 2 3)") should equal ("5")
-    parse("""(defun high (x y f) "" (f x y))""")
+    parse( """(defun add (x y) "" (+ x y))""")
+    parse("(add 2 3)") should equal("5")
+    parse( """(defun high (x y f) "" (f x y))""")
     parse("(high 2 3 add)") should equal("5")
+  }
+
+  it should "lambda correctly" in {
+    parse( """(defun high (x y f) "" (f x y))""")
+    parse( """(high 2 3 (lamba (x y) (+ x y)))""").toLong should equal(5l)
   }
 }

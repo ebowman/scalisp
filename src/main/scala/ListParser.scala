@@ -30,9 +30,9 @@ case class Var(repr: String) extends Expression("Var(%s)".format(repr)) {
   override def eval(implicit env: Env): Expression = env.vars(this).eval
 }
 
-class Func(repr: String) extends Var(repr)
+abstract class Function(repr: String, val args: List[String] = List.empty) extends Expression(repr)
 
-case class Function(name: String, args: List[String], desc: String, expression: Expression) extends Expression("(%s %s)".format(name, args.mkString(" "))) {
+case class DefFunction(name: String, override val args: List[String], desc: String, expression: Expression) extends Function("(%s %s)".format(name, args.mkString(" "))) {
 
   // since Lisp is pure (no side effects), a function can memoize its results.
   // pretty slow without this.
@@ -52,12 +52,12 @@ case class Function(name: String, args: List[String], desc: String, expression: 
 trait LispParser extends JavaTokenParsers {
   val dictionary = collection.mutable.Map[Var, Expression]()
 
-  implicit def env = Env(dictionary.toMap)
+  def globalEnv = Env(dictionary.toMap)
 
   def parse(program: String): String = {
     val result = parseAll(sExpression, program.trim)
     if (result.successful) {
-      result.get.eval.toString
+      result.get.eval(globalEnv).toString
     } else {
       sys.error(result.toString)
     }
@@ -82,71 +82,88 @@ trait LispParser extends JavaTokenParsers {
   def function: Parser[Expression] =
     "defun" ~> (variable ~ ("(" ~> rep(variable) <~ ")") ~ string ~ nExpression) ^^ {
       case name ~ vars ~ desc ~ body =>
-        dictionary += name -> Function(name.repr, vars.map(_.repr), desc.repr, body)
+        dictionary += name -> DefFunction(name.repr, vars.map(_.repr), desc.repr, body)
         Str("defined %s".format(name))
     } |
     "<" ~> nExpression ~ nExpression ^^ {
-      case left ~ right => new Expression("(< %s %s)".format(left, right)) {
+      case left ~ right => new Function("(< %s %s)".format(left, right)) {
         override def eval(implicit env: Env): Expression = left < right
       }
     } |
     "=" ~> nExpression ~ nExpression ^^ {
-      case left ~ right => new Expression("(= %s %s)".format(left, right)) {
+      case left ~ right => new Function("(= %s %s)".format(left, right)) {
         override def eval(implicit env: Env): Expression = (left: String) == (right: String)
       }
     } |
     ">" ~> nExpression ~ nExpression ^^ {
-      case left ~ right => new Expression("(> %s %s)".format(left, right)) {
+      case left ~ right => new Function("(> %s %s)".format(left, right)) {
         override def eval(implicit env: Env): Expression = left > right
       }
     } |
     ">=" ~> nExpression ~ nExpression ^^ {
-      case left ~ right => new Expression("(>= %s %s)".format(left, right)) {
+      case left ~ right => new Function("(>= %s %s)".format(left, right)) {
         override def eval(implicit env: Env): Expression = left >= right
       }
     } |
     "<=" ~> nExpression ~ nExpression ^^ {
-      case left ~ right => new Expression("(<= %s %s)".format(left, right)) {
+      case left ~ right => new Function("(<= %s %s)".format(left, right)) {
         override def eval(implicit env: Env): Expression = left <= right
       }
     } |
     "if" ~> nExpression ~ nExpression ~ nExpression ^^ {
-      case test ~ then ~ els => new Expression("(if %s then %s else %s)".format(test, then, els)) {
+      case test ~ then ~ els => new Function("(if %s then %s else %s)".format(test, then, els)) {
         override def eval(implicit env: Env): Expression = if (test) then.eval else els.eval
       }
     } |
     "+" ~> nExpression ~ rep1(nExpression) ^^ {
-      case head ~ tail => new Expression("(+ %s %s)".format(head, tail.mkString(" "))) {
+      case head ~ tail => new Function("(+ %s %s)".format(head, tail.mkString(" "))) {
         override def eval(implicit env: Env): Expression = ((head: Long) +: tail.map(n => n: Long)).sum
       }
     } |
     "-" ~> nExpression ~ rep1(nExpression) ^^ {
-      case head ~ tail => new Expression("(- %s %s)".format(head, tail.mkString(" "))) {
+      case head ~ tail => new Function("(- %s %s)".format(head, tail.mkString(" "))) {
         override def eval(implicit env: Env): Expression = ((head: Long) +: tail.map(n => (n: Long) * -1)).sum
       }
     } |
     "*" ~> nExpression ~ rep1(nExpression) ^^ {
-      case head ~ tail => new Expression("(* %s %s)".format(head, tail.mkString(" "))) {
+      case head ~ tail => new Function("(* %s %s)".format(head, tail.mkString(" "))) {
         override def eval(implicit env: Env): Expression = ((head: Long) +: tail.map(n => (n: Long))).product
       }
     } |
     "/" ~> nExpression ~ nExpression ^^ {
-      case num ~ denom => new Expression("( %s %s)".format(num, denom)) {
+      case num ~ denom => new Function("( %s %s)".format(num, denom)) {
         override def eval(implicit env: Env): Expression = num / denom
       }
+    } |
+    (("lamba" ~ "(") ~> rep1(variable) <~ ")") ~ nExpression ^^ {
+      case parseArgs ~ nExpression =>
+        new Function("(lambda (%s) %s)".format(parseArgs.map(_.repr).mkString(" "), nExpression), parseArgs.map(_.repr)) {
+          def eval(implicit env: Env): Expression = {
+            if (nExpression.isInstanceOf[Function]) {
+              val func = nExpression.asInstanceOf[Function]
+              val newEnv = envFromVars(func.asInstanceOf[Function].args, parseArgs)
+              // if all the args are non-vars, or vars in the environment, eval; otherwise, don't
+              if (parseArgs.forall((arg: Expression) => !arg.isInstanceOf[Var] ||
+                newEnv.vars.contains(arg.asInstanceOf[Var]))) {
+                func.eval(newEnv)
+              } else {
+                func
+              }
+            } else {
+              nExpression.eval
+            }
+          }
+        }
     } |
     variable ~ rep(nExpression) ^^ {
       case fname ~ args => new Expression("(%s %s)".format(fname, args.mkString(" "))) {
         override def eval(implicit env: Env): Expression = {
           var func = env.vars(fname)
           if (func.isInstanceOf[Function]) {
-            val contextVars = func.asInstanceOf[Function].args.map(Var(_)).zip(args.map {
-              case v: Var => v
-              case a: Expression => a.eval
-            })
-            val newEnv = env.copy(vars = env.vars ++ contextVars)
+            val newEnv = envFromVars(func.asInstanceOf[Function].args, args)
             // if all the args are in the environment, eval; otherwise, don't
-            if (args.forall((arg: Expression) => !arg.isInstanceOf[Var] || newEnv.vars.contains(arg.asInstanceOf[Var]))) {
+            if (args.forall((arg: Expression) => !arg.isInstanceOf[Var] ||
+                newEnv.vars.contains(arg.asInstanceOf[Var]))) {
               func.eval(newEnv)
             } else {
               func
@@ -158,9 +175,16 @@ trait LispParser extends JavaTokenParsers {
       }
     }
 
-  def nExpression: Parser[Expression] = ("(" ~> function <~ ")" | variable | string | number)
+  def nExpression: Parser[Expression] = "(" ~> function <~ ")" | variable | string | number
 
   def sExpression: Parser[Expression] = "(" ~> (function | variable | string | number) <~ ")"
+
+  def envFromVars(argVars: Seq[String], argVals: Seq[Expression])(implicit env: Env): Env = {
+    env.copy(vars = env.vars ++ argVars.map(Var(_)).zip(argVals.map {
+      case v: Var => v
+      case a: Expression => a.eval
+    }))
+  }
 }
 
 object Driver extends App with LispParser {
