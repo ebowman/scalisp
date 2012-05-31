@@ -3,11 +3,12 @@ import scala.util.parsing.combinator.JavaTokenParsers
 
 case class Env(vars: Map[Var, Expression])
 
-trait Expression {
+abstract class Expression(label: String) {
   def eval(implicit env: Env): Expression
+  override def toString = label
 }
 
-trait EvaluatedExpression extends Expression {
+abstract class EvaluatedExpression extends Expression("") {
   def repr: String
 
   def eval(implicit env: Env): Expression = this
@@ -25,11 +26,13 @@ case class Bool(b: Boolean) extends EvaluatedExpression {
 
 case class Str(repr: String) extends EvaluatedExpression
 
-case class Var(repr: String) extends Expression {
+case class Var(repr: String) extends Expression("Var(%s)".format(repr)) {
   override def eval(implicit env: Env): Expression = env.vars(this).eval
 }
 
-case class Function(name: String, args: List[String], desc: String, expression: Expression) extends Expression {
+class Func(repr: String) extends Var(repr)
+
+case class Function(name: String, args: List[String], desc: String, expression: Expression) extends Expression("(%s %s)".format(name, args.mkString(" "))) {
 
   // since Lisp is pure (no side effects), a function can memoize its results.
   // pretty slow without this.
@@ -83,61 +86,74 @@ trait LispParser extends JavaTokenParsers {
         Str("defined %s".format(name))
     } |
     "<" ~> nExpression ~ nExpression ^^ {
-      case left ~ right => new Expression {
+      case left ~ right => new Expression("(< %s %s)".format(left, right)) {
         override def eval(implicit env: Env): Expression = left < right
       }
     } |
     "=" ~> nExpression ~ nExpression ^^ {
-      case left ~ right => new Expression {
+      case left ~ right => new Expression("(= %s %s)".format(left, right)) {
         override def eval(implicit env: Env): Expression = (left: String) == (right: String)
       }
     } |
     ">" ~> nExpression ~ nExpression ^^ {
-      case left ~ right => new Expression {
+      case left ~ right => new Expression("(> %s %s)".format(left, right)) {
         override def eval(implicit env: Env): Expression = left > right
       }
     } |
     ">=" ~> nExpression ~ nExpression ^^ {
-      case left ~ right => new Expression {
+      case left ~ right => new Expression("(>= %s %s)".format(left, right)) {
         override def eval(implicit env: Env): Expression = left >= right
       }
     } |
     "<=" ~> nExpression ~ nExpression ^^ {
-      case left ~ right => new Expression {
+      case left ~ right => new Expression("(<= %s %s)".format(left, right)) {
         override def eval(implicit env: Env): Expression = left <= right
       }
     } |
     "if" ~> nExpression ~ nExpression ~ nExpression ^^ {
-      case test ~ then ~ els => new Expression {
+      case test ~ then ~ els => new Expression("(if %s then %s else %s)".format(test, then, els)) {
         override def eval(implicit env: Env): Expression = if (test) then.eval else els.eval
       }
     } |
     "+" ~> nExpression ~ rep1(nExpression) ^^ {
-      case head ~ tail => new Expression {
+      case head ~ tail => new Expression("(+ %s %s)".format(head, tail.mkString(" "))) {
         override def eval(implicit env: Env): Expression = ((head: Long) +: tail.map(n => n: Long)).sum
       }
     } |
     "-" ~> nExpression ~ rep1(nExpression) ^^ {
-      case head ~ tail => new Expression {
+      case head ~ tail => new Expression("(- %s %s)".format(head, tail.mkString(" "))) {
         override def eval(implicit env: Env): Expression = ((head: Long) +: tail.map(n => (n: Long) * -1)).sum
       }
     } |
     "*" ~> nExpression ~ rep1(nExpression) ^^ {
-      case head ~ tail => new Expression {
+      case head ~ tail => new Expression("(* %s %s)".format(head, tail.mkString(" "))) {
         override def eval(implicit env: Env): Expression = ((head: Long) +: tail.map(n => (n: Long))).product
       }
     } |
     "/" ~> nExpression ~ nExpression ^^ {
-      case head ~ tail => new Expression {
-        override def eval(implicit env: Env): Expression = head / tail
+      case num ~ denom => new Expression("( %s %s)".format(num, denom)) {
+        override def eval(implicit env: Env): Expression = num / denom
       }
     } |
     variable ~ rep(nExpression) ^^ {
-      case fname ~ args => new Expression {
+      case fname ~ args => new Expression("(%s %s)".format(fname, args.mkString(" "))) {
         override def eval(implicit env: Env): Expression = {
-          val func = dictionary(fname).asInstanceOf[Function]
-          val newEnv = env.copy(vars = env.vars ++ func.args.map(Var(_)).zip(args.map(_.eval)))
-          func.eval(newEnv)
+          var func = env.vars(fname)
+          if (func.isInstanceOf[Function]) {
+            val contextVars = func.asInstanceOf[Function].args.map(Var(_)).zip(args.map {
+              case v: Var => v
+              case a: Expression => a.eval
+            })
+            val newEnv = env.copy(vars = env.vars ++ contextVars)
+            // if all the args are in the environment, eval; otherwise, don't
+            if (args.forall((arg: Expression) => !arg.isInstanceOf[Var] || newEnv.vars.contains(arg.asInstanceOf[Var]))) {
+              func.eval(newEnv)
+            } else {
+              func
+            }
+          } else {
+            func.eval
+          }
         }
       }
     }
